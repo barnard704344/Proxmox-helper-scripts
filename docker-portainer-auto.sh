@@ -1,20 +1,30 @@
 #!/bin/bash
-
-set +e  # Allow graceful handling of errors
+set +e
 
 echo "🚀 Proxmox Docker + Portainer Setup"
 
-# === Constants ===
-TEMPLATE_GLOB="debian-12-standard_*_amd64.tar.zst"
+# === Get next available CTID ===
 CTID=$(pvesh get /cluster/nextid)
 
-read -rp "📝 Enter a name for the container (hostname): " HOSTNAME
+# === Prompt for container hostname ===
+exec 3</dev/tty
+read -u 3 -rp "📝 Enter a name for the container (hostname): " HOSTNAME
 if [[ -z "$HOSTNAME" ]]; then
   echo "❌ Hostname cannot be empty. Aborting."
   exit 1
 fi
 
-PASSWORD="changeme"
+# === Prompt for root password ===
+read -u 3 -rsp "🔐 Enter root password for container: " PASSWORD
+echo ""
+read -u 3 -rsp "🔐 Confirm root password: " PASSWORD_CONFIRM
+echo ""
+if [[ "$PASSWORD" != "$PASSWORD_CONFIRM" ]]; then
+  echo "❌ Passwords do not match. Aborting."
+  exit 1
+fi
+
+# === Container settings ===
 DISK_SIZE="8G"
 MEMORY=2048
 CORES=2
@@ -23,6 +33,7 @@ IP="dhcp"
 
 # === Find LXC Template ===
 echo "🔍 Searching all storages for Debian 12 template..."
+TEMPLATE_GLOB="debian-12-standard_*_amd64.tar.zst"
 TEMPLATE_FILE=$(find /mnt/pve/*/template/cache/ -maxdepth 1 -type f -name "$TEMPLATE_GLOB" 2>/dev/null | sort -Vr | head -n 1)
 
 if [[ -z "$TEMPLATE_FILE" ]]; then
@@ -37,13 +48,13 @@ TEMPLATE_BASENAME=$(basename "$TEMPLATE_FILE")
 echo "💾 Found template: $TEMPLATE_BASENAME on storage: $TEMPLATE_STORAGE"
 echo "🆔 Preparing container with CTID: $CTID"
 
-# === Prompt for Rootfs Storage ===
+# === Prompt for rootfs storage ===
 while true; do
   echo ""
   echo "🔍 Available storage options for container rootfs:"
   pvesm status --enabled 1 | awk '{print "  - " $1 " (" $2 ")"}'
   echo ""
-  read -rp "💾 Enter storage to use for the container rootfs (e.g. nas, local-lvm): " ROOTFS_STORAGE
+  read -u 3 -rp "💾 Enter storage to use for the container rootfs (e.g. nas, local-lvm): " ROOTFS_STORAGE
 
   pvesm status | awk '{print $1}' | grep -qx "$ROOTFS_STORAGE"
   if [[ $? -ne 0 ]]; then
@@ -70,7 +81,7 @@ while true; do
   break
 done
 
-# === Fix rootfs argument
+# === Handle rootfs size argument ===
 if [[ "$STORAGE_TYPE" == "dir" || "$STORAGE_TYPE" == "nfs" || "$STORAGE_TYPE" == "cifs" ]]; then
   ROOTFS_ARG="--rootfs $ROOTFS_STORAGE"
 else
@@ -80,7 +91,7 @@ fi
 
 echo "📦 Creating container on storage: $ROOTFS_STORAGE ($STORAGE_TYPE)"
 
-# === Create container
+# === Create the container ===
 CREATE_LOG=$(mktemp)
 /usr/sbin/pct create "$CTID" "$TEMPLATE_FILE" \
   --hostname "$HOSTNAME" \
@@ -104,17 +115,26 @@ if ! pct status "$CTID" &>/dev/null; then
 fi
 rm -f "$CREATE_LOG"
 
-# === Start container
+# === Start the container ===
 echo "▶️ Starting container $CTID..."
 pct start "$CTID"
 sleep 5
 
-# === Install Docker + Portainer
-echo "🔧 Installing Docker and Portainer inside CT $CTID..."
+# === Install Docker, SSH, and Portainer ===
+echo "🔧 Installing Docker, SSH, and Portainer inside CT $CTID..."
 pct exec "$CTID" -- bash -c '
 set -e
 apt update && apt upgrade -y
-apt install -y ca-certificates curl gnupg lsb-release
+apt install -y openssh-server ca-certificates curl gnupg lsb-release
+
+# Enable root login via SSH
+systemctl enable ssh
+systemctl start ssh
+sed -i "s/^#\?PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config
+sed -i "s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config
+systemctl restart ssh || systemctl restart sshd
+
+# Install Docker
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 chmod a+r /etc/apt/keyrings/docker.gpg
@@ -123,12 +143,15 @@ apt update
 apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 systemctl enable docker
 systemctl start docker
+
+# Deploy Portainer
 docker volume create portainer_data
 docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest
 '
 
-# === Show access info
+# === Display Access Info ===
 IP=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
 echo ""
 echo "✅ Portainer is ready!"
 echo "🔗 Access it at: https://$IP:9443"
+echo "🔐 Login with root / your chosen password via SSH if needed."
