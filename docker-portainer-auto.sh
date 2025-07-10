@@ -57,11 +57,10 @@ echo "💾 Using template: $TEMPLATE_BASENAME"
 echo "🆔 Using CTID: $CTID"
 echo "📦 Storage type: $STORAGE_TYPE"
 
-# === Create the container
+# === Create the container (NO --storage used here)
 pct create "$CTID" "$TEMPLATE_FILE" \
   --hostname "$HOSTNAME" \
   --password "$PASSWORD" \
-  --storage "$STORAGE_NAME" \
   $ROOTFS_ARG \
   --net0 name=eth0,bridge="$BRIDGE",ip="$IP" \
   --ostype debian \
