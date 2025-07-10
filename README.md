@@ -12,4 +12,4 @@ Creates a new Debian 12 LXC container, installs Docker and Portainer with HTTPS,
 **Run it with one line:**
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/barnard704344/Proxmox-helper-scripts/main/docker-portainer-auto.sh)
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/barnard704344/Proxmox-helper-scripts/main/docker-portainer-auto.sh)" </dev/tty
