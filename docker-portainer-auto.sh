@@ -4,21 +4,9 @@ set -e
 
 echo "🚀 Proxmox Docker + Portainer Setup"
 
-# === Prompt for Template Storage ===
-echo ""
-echo "🔍 Available storage locations that support templates:"
-pvesm status --enabled 1 | awk '/vztmpl/ {print "  - " $1}'
-echo ""
-read -rp "💾 Enter storage to use for templates (as shown above): " TEMPLATE_STORE
-
-if ! pvesm status | awk '/vztmpl/ {print $1}' | grep -q "^$TEMPLATE_STORE$"; then
-  echo "❌ Invalid storage selected. Aborting."
-  exit 1
-fi
-
 # === Constants ===
-TEMPLATE="debian-12-standard_12.2-1_amd64.tar.zst"
-TEMPLATE_SHORT="debian-12-standard"
+TEMPLATE_NAME_PREFIX="debian-12-standard"
+TEMPLATE_GLOB="${TEMPLATE_NAME_PREFIX}_*_amd64.tar.zst"
 CTID=$(pvesh get /cluster/nextid)
 HOSTNAME="portainer-deb12"
 PASSWORD="changeme"
@@ -28,20 +16,34 @@ CORES=2
 BRIDGE="vmbr0"
 IP="dhcp"
 
-echo ""
-echo "🆔 Selected CTID: $CTID"
-echo "📁 Using storage: $TEMPLATE_STORE"
-
-# === Download template if missing ===
-if ! ls "/var/lib/vz/template/cache/$TEMPLATE" >/dev/null 2>&1; then
-  echo "📦 Template not found. Downloading $TEMPLATE_SHORT..."
-  pveam update
-  pveam download "$TEMPLATE_STORE" "$TEMPLATE_SHORT"
+# === Detect a valid template store with vztmpl support ===
+TEMPLATE_STORE=$(pvesm status --enabled 1 | awk '/vztmpl/ {print $1; exit}')
+if [ -z "$TEMPLATE_STORE" ]; then
+  echo "❌ No storage with 'vztmpl' content enabled was found. Please enable it using:"
+  echo "    pvesm set <storage> --content vztmpl"
+  exit 1
 fi
 
-# === Create LXC container ===
+echo "💾 Using detected template store: $TEMPLATE_STORE"
+
+# === Template path resolution ===
+CACHE_PATH="/mnt/pve/${TEMPLATE_STORE}/template/cache"
+TEMPLATE_FILE=$(find "$CACHE_PATH" -type f -name "$TEMPLATE_GLOB" | sort -rV | head -n 1)
+
+if [ -z "$TEMPLATE_FILE" ]; then
+  echo "📦 No Debian 12 LXC template found in $CACHE_PATH"
+  echo "🔻 Downloading latest available version of $TEMPLATE_NAME_PREFIX..."
+  pveam update
+  pveam available | grep "$TEMPLATE_NAME_PREFIX" | sort -rV | head -n 1 | awk '{print $1}' | xargs -I {} pveam download "$TEMPLATE_STORE" {}
+  TEMPLATE_FILE=$(find "$CACHE_PATH" -type f -name "$TEMPLATE_GLOB" | sort -rV | head -n 1)
+fi
+
+TEMPLATE_BASENAME=$(basename "$TEMPLATE_FILE")
+echo "📦 Using template: $TEMPLATE_BASENAME"
+
+# === Create the container ===
 echo "📦 Creating container $CTID..."
-pct create "$CTID" "$TEMPLATE_STORE:vztmpl/$TEMPLATE" \
+pct create "$CTID" "${TEMPLATE_STORE}:vztmpl/${TEMPLATE_BASENAME}" \
   --hostname "$HOSTNAME" \
   --password "$PASSWORD" \
   --storage "$TEMPLATE_STORE" \
@@ -58,7 +60,7 @@ echo "▶️ Starting container $CTID..."
 pct start "$CTID"
 sleep 10
 
-# === Run Docker + Portainer setup inside CT ===
+# === Install Docker + Portainer ===
 echo "🔧 Installing Docker and Portainer inside CT $CTID..."
 pct exec "$CTID" -- bash -c '
 set -e
@@ -76,8 +78,8 @@ docker volume create portainer_data
 docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest
 '
 
-# === Display access info ===
+# === Final Output ===
 IP=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
 echo ""
 echo "✅ Portainer is ready!"
-echo "👉 Access it at: https://$IP:9443"
+echo "🔗 Access it at: https://$IP:9443"
