@@ -15,7 +15,7 @@ CORES=2
 BRIDGE="vmbr0"
 IP="dhcp"
 
-# === Search all mounted storages for template
+# === Search all storages for template
 echo "🔍 Searching all storages for Debian 12 template..."
 TEMPLATE_FILE=$(find /mnt/pve/*/template/cache/ -maxdepth 1 -type f -name "$TEMPLATE_GLOB" 2>/dev/null | sort -Vr | head -n 1)
 
@@ -44,11 +44,22 @@ if ! pvesm status | awk '{print $1}' | grep -qx "$ROOTFS_STORAGE"; then
   exit 1
 fi
 
-# === Detect rootfs storage type
+# === Detect storage type
 STORAGE_TYPE=$(pvesm status | awk -v s="$ROOTFS_STORAGE" '$1==s {print $2}')
 if [ -z "$STORAGE_TYPE" ]; then
   echo "❌ Could not detect storage type for '$ROOTFS_STORAGE'"
   exit 1
+fi
+
+# === Check if LVM storage has thin pool
+if [[ "$STORAGE_TYPE" == "lvm" ]]; then
+  THINPOOL_EXISTS=$(lvs --noheadings -o attr "$ROOTFS_STORAGE" 2>/dev/null | grep -q "t" && echo yes || echo no)
+  if [[ "$THINPOOL_EXISTS" == "no" ]]; then
+    echo "❌ Storage '$ROOTFS_STORAGE' is plain LVM without a thin pool."
+    echo "🛠️  LXC containers require 'lvmthin', 'nfs', or 'dir' type."
+    echo "💡 Please choose another storage like 'local-lvm' or 'nas'."
+    exit 1
+  fi
 fi
 
 # === Set rootfs argument based on storage type
