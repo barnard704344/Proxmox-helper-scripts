@@ -53,8 +53,8 @@ fi
 
 # === Check if LVM storage has thin pool
 if [[ "$STORAGE_TYPE" == "lvm" ]]; then
-  THINPOOL_EXISTS=$(lvs --noheadings -o attr "$ROOTFS_STORAGE" 2>/dev/null | grep -q "t" && echo yes || echo no)
-  if [[ "$THINPOOL_EXISTS" == "no" ]]; then
+  VG_ATTR=$(vgs --noheadings -o attr "$ROOTFS_STORAGE" 2>/dev/null | awk '{print $1}')
+  if [[ "$VG_ATTR" != *"t"* ]]; then
     echo "❌ Storage '$ROOTFS_STORAGE' is plain LVM without a thin pool."
     echo "🛠️  LXC containers require 'lvmthin', 'nfs', or 'dir' type."
     echo "💡 Please choose another storage like 'local-lvm' or 'nas'."
