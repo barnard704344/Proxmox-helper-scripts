@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set +e  # Allow graceful handling of errors
+set +e  # graceful fail handling
 
 echo "🚀 Proxmox Docker + Portainer Setup"
 
@@ -88,9 +88,8 @@ CREATE_LOG=$(mktemp)
   --unprivileged 1 \
   >"$CREATE_LOG" 2>&1
 
-CONF_FILE="/etc/pve/lxc/${CTID}.conf"
-if [[ ! -f "$CONF_FILE" ]]; then
-  echo "❌ Container config not found. Create failed."
+if ! pct status "$CTID" &>/dev/null; then
+  echo "❌ Container $CTID does not exist. Create failed."
   echo "==== pct create output ===="
   cat "$CREATE_LOG"
   echo "==========================="
