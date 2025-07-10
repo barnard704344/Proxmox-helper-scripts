@@ -16,59 +16,33 @@ CORES=2
 BRIDGE="vmbr0"
 IP="dhcp"
 
-# === Get all storages that support LXC templates ===
-echo "🔍 Searching for available template in valid storage..."
-VALID_STORES=($(pvesm status --enabled 1 | awk '/vztmpl/ {print $1}'))
-
-if [ ${#VALID_STORES[@]} -eq 0 ]; then
-  echo "❌ No storage found with 'vztmpl' content enabled."
-  echo "👉 Run this to enable: pvesm set <storage> --content vztmpl,backup,iso"
-  exit 1
-fi
-
-# === Ensure all storage is mounted ===
-for store in "${VALID_STORES[@]}"; do
-  MOUNTPOINT="/mnt/pve/${store}"
-  if ! mountpoint -q "$MOUNTPOINT"; then
-    echo "🔄 Mounting $store..."
-    pvesm path "$store" > /dev/null 2>&1 || true
-  fi
-done
-
-# === Try to locate an existing template ===
-TEMPLATE_STORE=""
+# === Search mounted storage for valid template ===
+echo "🔍 Scanning mounted storages for LXC template: $TEMPLATE_GLOB"
 TEMPLATE_FILE=""
+TEMPLATE_STORE=""
 
-for store in "${VALID_STORES[@]}"; do
-  CACHE_PATH="/mnt/pve/${store}/template/cache"
-  FILE=$(find "$CACHE_PATH" -type f -name "$TEMPLATE_GLOB" 2>/dev/null | sort -rV | head -n 1)
-  if [ -n "$FILE" ]; then
-    TEMPLATE_STORE="$store"
-    TEMPLATE_FILE="$FILE"
-    break
+for path in /mnt/pve/*/template/cache/; do
+  if [ -d "$path" ]; then
+    FILE=$(find "$path" -maxdepth 1 -type f -name "$TEMPLATE_GLOB" 2>/dev/null | sort -rV | head -n 1)
+    if [ -n "$FILE" ]; then
+      TEMPLATE_FILE="$FILE"
+      TEMPLATE_STORE=$(echo "$FILE" | cut -d'/' -f4)  # Extract 'nas' or 'local' etc
+      break
+    fi
   fi
 done
 
-# === Download if not found ===
+# === Fail if not found ===
 if [ -z "$TEMPLATE_FILE" ]; then
-  echo "📦 No template found. Downloading into '${VALID_STORES[0]}'..."
-  pveam update
-  TEMPLATE_VERSION=$(pveam available | grep "$TEMPLATE_NAME_PREFIX" | sort -rV | head -n 1 | awk '{print $1}')
-  pveam download "${VALID_STORES[0]}" "$TEMPLATE_VERSION"
-  TEMPLATE_STORE="${VALID_STORES[0]}"
-  CACHE_PATH="/mnt/pve/${TEMPLATE_STORE}/template/cache"
-  TEMPLATE_FILE=$(find "$CACHE_PATH" -type f -name "$TEMPLATE_GLOB" | sort -rV | head -n 1)
-fi
-
-# === Final check ===
-if [ -z "$TEMPLATE_FILE" ]; then
-  echo "❌ Failed to locate or download template."
+  echo "❌ No usable Debian 12 template found in /mnt/pve/*/template/cache/"
+  echo "💡 To fix: download a template using GUI or place it manually into:"
+  echo "   /mnt/pve/<storage>/template/cache/$TEMPLATE_GLOB"
   exit 1
 fi
 
 TEMPLATE_BASENAME=$(basename "$TEMPLATE_FILE")
-echo "💾 Using template: $TEMPLATE_BASENAME from $TEMPLATE_STORE"
-echo "🆔 Creating CTID: $CTID"
+echo "💾 Found template: $TEMPLATE_BASENAME in storage: $TEMPLATE_STORE"
+echo "🆔 Creating container with CTID: $CTID"
 
 # === Create container ===
 pct create "$CTID" "${TEMPLATE_STORE}:vztmpl/${TEMPLATE_BASENAME}" \
@@ -106,7 +80,7 @@ docker volume create portainer_data
 docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest
 '
 
-# === Show result ===
+# === Show final access link ===
 IP=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
 echo ""
 echo "✅ Portainer is ready!"
