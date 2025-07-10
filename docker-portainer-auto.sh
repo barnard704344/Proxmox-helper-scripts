@@ -32,35 +32,38 @@ TEMPLATE_BASENAME=$(basename "$TEMPLATE_FILE")
 echo "💾 Found template: $TEMPLATE_BASENAME on storage: $TEMPLATE_STORAGE"
 echo "🆔 Preparing container with CTID: $CTID"
 
-# === Prompt for container rootfs storage
-echo ""
-echo "🔍 Available storage options for container rootfs:"
-pvesm status --enabled 1 | awk '{print "  - " $1 " (" $2 ")"}'
-echo ""
-read -rp "💾 Enter storage to use for the container rootfs (e.g. nas, local-lvm): " ROOTFS_STORAGE
+# === Prompt for container rootfs storage with validation loop
+while true; do
+  echo ""
+  echo "🔍 Available storage options for container rootfs:"
+  pvesm status --enabled 1 | awk '{print "  - " $1 " (" $2 ")"}'
+  echo ""
+  read -rp "💾 Enter storage to use for the container rootfs (e.g. nas, local-lvm): " ROOTFS_STORAGE
 
-if ! pvesm status | awk '{print $1}' | grep -qx "$ROOTFS_STORAGE"; then
-  echo "❌ Storage '$ROOTFS_STORAGE' not found. Aborting."
-  exit 1
-fi
-
-# === Detect storage type
-STORAGE_TYPE=$(pvesm status | awk -v s="$ROOTFS_STORAGE" '$1==s {print $2}')
-if [ -z "$STORAGE_TYPE" ]; then
-  echo "❌ Could not detect storage type for '$ROOTFS_STORAGE'"
-  exit 1
-fi
-
-# === Check if LVM storage has thin pool
-if [[ "$STORAGE_TYPE" == "lvm" ]]; then
-  VG_ATTR=$(vgs --noheadings -o attr "$ROOTFS_STORAGE" 2>/dev/null | awk '{print $1}')
-  if [[ "$VG_ATTR" != *"t"* ]]; then
-    echo "❌ Storage '$ROOTFS_STORAGE' is plain LVM without a thin pool."
-    echo "🛠️  LXC containers require 'lvmthin', 'nfs', or 'dir' type."
-    echo "💡 Please choose another storage like 'local-lvm' or 'nas'."
-    exit 1
+  if ! pvesm status | awk '{print $1}' | grep -qx "$ROOTFS_STORAGE"; then
+    echo "❌ Storage '$ROOTFS_STORAGE' not found. Try again."
+    continue
   fi
-fi
+
+  STORAGE_TYPE=$(pvesm status | awk -v s="$ROOTFS_STORAGE" '$1==s {print $2}')
+  if [ -z "$STORAGE_TYPE" ]; then
+    echo "❌ Could not detect storage type for '$ROOTFS_STORAGE'. Try again."
+    continue
+  fi
+
+  if [[ "$STORAGE_TYPE" == "lvm" ]]; then
+    VG_ATTR=$(vgs --noheadings -o attr "$ROOTFS_STORAGE" 2>/dev/null | awk '{print $1}')
+    if [[ "$VG_ATTR" != *"t"* ]]; then
+      echo "❌ Storage '$ROOTFS_STORAGE' is plain LVM without a thin pool."
+      echo "🛠️  LXC containers require 'lvmthin', 'nfs', or 'dir' type."
+      echo "💡 Please choose another storage like 'local-lvm' or 'nas'."
+      continue
+    fi
+  fi
+
+  # Valid storage selected
+  break
+done
 
 # === Set rootfs argument based on storage type
 if [[ "$STORAGE_TYPE" == "dir" || "$STORAGE_TYPE" == "nfs" || "$STORAGE_TYPE" == "cifs" ]]; then
