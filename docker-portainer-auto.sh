@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set +e  # Allow graceful handling
+set +e  # Allow graceful handling of errors
 
 echo "🚀 Proxmox Docker + Portainer Setup"
 
@@ -15,24 +15,23 @@ CORES=2
 BRIDGE="vmbr0"
 IP="dhcp"
 
-# === Search all storages for template
+# === Find LXC Template ===
 echo "🔍 Searching all storages for Debian 12 template..."
 TEMPLATE_FILE=$(find /mnt/pve/*/template/cache/ -maxdepth 1 -type f -name "$TEMPLATE_GLOB" 2>/dev/null | sort -Vr | head -n 1)
 
-if [ -z "$TEMPLATE_FILE" ]; then
+if [[ -z "$TEMPLATE_FILE" ]]; then
   echo "❌ No Debian 12 LXC template found!"
-  echo "💡 Please download one via GUI or place at:"
+  echo "💡 Please upload one via Proxmox GUI or place it at:"
   echo "   /mnt/pve/<storage>/template/cache/$TEMPLATE_GLOB"
   exit 1
 fi
 
 TEMPLATE_STORAGE=$(echo "$TEMPLATE_FILE" | cut -d'/' -f4)
 TEMPLATE_BASENAME=$(basename "$TEMPLATE_FILE")
-
 echo "💾 Found template: $TEMPLATE_BASENAME on storage: $TEMPLATE_STORAGE"
 echo "🆔 Preparing container with CTID: $CTID"
 
-# === Prompt for container rootfs storage with validation loop
+# === Prompt for Rootfs Storage ===
 while true; do
   echo ""
   echo "🔍 Available storage options for container rootfs:"
@@ -41,13 +40,13 @@ while true; do
   read -rp "💾 Enter storage to use for the container rootfs (e.g. nas, local-lvm): " ROOTFS_STORAGE
 
   pvesm status | awk '{print $1}' | grep -qx "$ROOTFS_STORAGE"
-  if [ $? -ne 0 ]; then
+  if [[ $? -ne 0 ]]; then
     echo "❌ Storage '$ROOTFS_STORAGE' not found. Try again."
     continue
   fi
 
   STORAGE_TYPE=$(pvesm status | awk -v s="$ROOTFS_STORAGE" '$1==s {print $2}')
-  if [ -z "$STORAGE_TYPE" ]; then
+  if [[ -z "$STORAGE_TYPE" ]]; then
     echo "❌ Could not detect storage type for '$ROOTFS_STORAGE'. Try again."
     continue
   fi
@@ -76,7 +75,8 @@ fi
 echo "📦 Creating container on storage: $ROOTFS_STORAGE ($STORAGE_TYPE)"
 
 # === Create container
-pct create "$CTID" "$TEMPLATE_FILE" \
+CREATE_LOG=$(mktemp)
+/usr/sbin/pct create "$CTID" "$TEMPLATE_FILE" \
   --hostname "$HOSTNAME" \
   --password "$PASSWORD" \
   $ROOTFS_ARG \
@@ -85,18 +85,24 @@ pct create "$CTID" "$TEMPLATE_FILE" \
   --features nesting=1 \
   --cores "$CORES" \
   --memory "$MEMORY" \
-  --unprivileged 1 > /dev/null
+  --unprivileged 1 \
+  >"$CREATE_LOG" 2>&1
 
-# === Validate container creation
-if ! pct config "$CTID" &>/dev/null; then
-  echo "❌ Failed to create container $CTID. Aborting."
+CONF_FILE="/etc/pve/lxc/${CTID}.conf"
+if [[ ! -f "$CONF_FILE" ]]; then
+  echo "❌ Container config not found. Create failed."
+  echo "==== pct create output ===="
+  cat "$CREATE_LOG"
+  echo "==========================="
+  rm -f "$CREATE_LOG"
   exit 1
 fi
+rm -f "$CREATE_LOG"
 
 # === Start container
 echo "▶️ Starting container $CTID..."
 pct start "$CTID"
-sleep 10
+sleep 5
 
 # === Install Docker + Portainer
 echo "🔧 Installing Docker and Portainer inside CT $CTID..."
@@ -116,7 +122,7 @@ docker volume create portainer_data
 docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest
 '
 
-# === Show access URL
+# === Show access info
 IP=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
 echo ""
 echo "✅ Portainer is ready!"
