@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e
+set +e  # allow graceful handling instead of exiting on errors
 
 echo "🚀 Proxmox Docker + Portainer Setup"
 
@@ -40,17 +40,21 @@ while true; do
   echo ""
   read -rp "💾 Enter storage to use for the container rootfs (e.g. nas, local-lvm): " ROOTFS_STORAGE
 
-  if ! pvesm status | awk '{print $1}' | grep -qx "$ROOTFS_STORAGE"; then
+  # Check if storage exists
+  pvesm status | awk '{print $1}' | grep -qx "$ROOTFS_STORAGE"
+  if [ $? -ne 0 ]; then
     echo "❌ Storage '$ROOTFS_STORAGE' not found. Try again."
     continue
   fi
 
+  # Detect storage type
   STORAGE_TYPE=$(pvesm status | awk -v s="$ROOTFS_STORAGE" '$1==s {print $2}')
   if [ -z "$STORAGE_TYPE" ]; then
     echo "❌ Could not detect storage type for '$ROOTFS_STORAGE'. Try again."
     continue
   fi
 
+  # Handle LVM without thin pool
   if [[ "$STORAGE_TYPE" == "lvm" ]]; then
     VG_ATTR=$(vgs --noheadings -o attr "$ROOTFS_STORAGE" 2>/dev/null | awk '{print $1}')
     if [[ "$VG_ATTR" != *"t"* ]]; then
