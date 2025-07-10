@@ -15,26 +15,49 @@ CORES=2
 BRIDGE="vmbr0"
 IP="dhcp"
 
-# === Scan all template paths
-echo "🔍 Scanning for Debian 12 LXC template..."
-TEMPLATE_FILE=$(find /mnt/pve/*/template/cache/ -maxdepth 1 -type f -name "$TEMPLATE_GLOB" 2>/dev/null | sort -Vr | head -n 1)
-
-if [ -z "$TEMPLATE_FILE" ]; then
-  echo "❌ No Debian 12 LXC template found!"
-  echo "💡 Please download a template via the Proxmox GUI or manually place one at:"
-  echo "   /mnt/pve/<storage>/template/cache/$TEMPLATE_GLOB"
+# === Prompt for storage to use
+echo ""
+echo "🔍 Available storage options:"
+pvesm status --enabled 1 | awk '{print "  - " $1 " (" $2 ")"}'
+echo ""
+read -rp "💾 Enter storage to use for the container (e.g. nas, local-lvm): " STORAGE_NAME
+if ! pvesm status | awk '{print $1}' | grep -qx "$STORAGE_NAME"; then
+  echo "❌ Storage '$STORAGE_NAME' not found. Aborting."
   exit 1
 fi
 
-echo "💾 Found template: $TEMPLATE_FILE"
-echo "🆔 Using CTID: $CTID"
+# === Detect storage type
+STORAGE_TYPE=$(pvesm status | awk -v s="$STORAGE_NAME" '$1==s {print $2}')
 
-# === Create the container using full path (no vztmpl!)
+# === Locate template on that storage
+echo "🔍 Searching for Debian 12 template in $STORAGE_NAME..."
+TEMPLATE_FILE=$(find /mnt/pve/$STORAGE_NAME/template/cache/ -maxdepth 1 -type f -name "$TEMPLATE_GLOB" 2>/dev/null | sort -Vr | head -n 1)
+
+if [ -z "$TEMPLATE_FILE" ]; then
+  echo "❌ No Debian 12 template found in /mnt/pve/$STORAGE_NAME/template/cache/"
+  echo "💡 Download one via GUI or manually place a file like:"
+  echo "   /mnt/pve/$STORAGE_NAME/template/cache/$TEMPLATE_GLOB"
+  exit 1
+fi
+
+TEMPLATE_BASENAME=$(basename "$TEMPLATE_FILE")
+echo "💾 Found template: $TEMPLATE_BASENAME"
+echo "🆔 Using CTID: $CTID"
+echo "📦 Storage type: $STORAGE_TYPE"
+
+# === Set rootfs argument based on storage type
+if [[ "$STORAGE_TYPE" == "dir" || "$STORAGE_TYPE" == "nfs" || "$STORAGE_TYPE" == "cifs" ]]; then
+  ROOTFS_ARG="--rootfs $STORAGE_NAME"
+else
+  ROOTFS_ARG="--rootfs $STORAGE_NAME:$DISK_SIZE"
+fi
+
+# === Create container using full template path
 pct create "$CTID" "$TEMPLATE_FILE" \
   --hostname "$HOSTNAME" \
   --password "$PASSWORD" \
-  --storage "$(echo "$TEMPLATE_FILE" | cut -d'/' -f4)" \
-  --rootfs "$(echo "$TEMPLATE_FILE" | cut -d'/' -f4):$DISK_SIZE" \
+  --storage "$STORAGE_NAME" \
+  $ROOTFS_ARG \
   --net0 name=eth0,bridge="$BRIDGE",ip="$IP" \
   --ostype debian \
   --features nesting=1 \
@@ -47,8 +70,8 @@ echo "▶️ Starting container $CTID..."
 pct start "$CTID"
 sleep 10
 
-# === Install Docker + Portainer inside CT
-echo "🔧 Installing Docker and Portainer in CT $CTID..."
+# === Install Docker + Portainer
+echo "🔧 Installing Docker and Portainer inside CT $CTID..."
 pct exec "$CTID" -- bash -c '
 set -e
 apt update && apt upgrade -y
@@ -65,7 +88,7 @@ docker volume create portainer_data
 docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest
 '
 
-# === Display Access Info
+# === Final message
 IP=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
 echo ""
 echo "✅ Portainer is ready!"
