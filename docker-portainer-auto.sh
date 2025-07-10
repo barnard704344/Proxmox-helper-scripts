@@ -15,49 +15,52 @@ CORES=2
 BRIDGE="vmbr0"
 IP="dhcp"
 
-# === Prompt for storage
-echo ""
-echo "🔍 Available storage options:"
-pvesm status --enabled 1 | awk '{print "  - " $1 " (" $2 ")"}'
-echo ""
-read -rp "💾 Enter storage to use for the container (e.g. nas, local-lvm): " STORAGE_NAME
-
-if ! pvesm status | awk '{print $1}' | grep -qx "$STORAGE_NAME"; then
-  echo "❌ Storage '$STORAGE_NAME' not found. Aborting."
-  exit 1
-fi
-
-# === Detect storage type
-STORAGE_TYPE=$(pvesm status | awk -v s="$STORAGE_NAME" '$1==s {print $2}')
-if [ -z "$STORAGE_TYPE" ]; then
-  echo "❌ Could not detect storage type for '$STORAGE_NAME'"
-  exit 1
-fi
-
-# === Set rootfs argument properly
-if [[ "$STORAGE_TYPE" == "dir" || "$STORAGE_TYPE" == "nfs" || "$STORAGE_TYPE" == "cifs" ]]; then
-  ROOTFS_ARG="--rootfs $STORAGE_NAME"
-else
-  ROOTFS_ARG="--rootfs $STORAGE_NAME:$DISK_SIZE"
-fi
-
-# === Find template file on selected storage
-echo "🔍 Searching for Debian 12 template in /mnt/pve/$STORAGE_NAME/template/cache/ ..."
-TEMPLATE_FILE=$(find /mnt/pve/$STORAGE_NAME/template/cache/ -maxdepth 1 -type f -name "$TEMPLATE_GLOB" 2>/dev/null | sort -Vr | head -n 1)
+# === Search all mounted storages for template
+echo "🔍 Searching all storages for Debian 12 template..."
+TEMPLATE_FILE=$(find /mnt/pve/*/template/cache/ -maxdepth 1 -type f -name "$TEMPLATE_GLOB" 2>/dev/null | sort -Vr | head -n 1)
 
 if [ -z "$TEMPLATE_FILE" ]; then
-  echo "❌ No Debian 12 LXC template found on $STORAGE_NAME!"
-  echo "💡 Please download one via the Proxmox GUI or place it manually at:"
-  echo "   /mnt/pve/$STORAGE_NAME/template/cache/$TEMPLATE_GLOB"
+  echo "❌ No Debian 12 LXC template found!"
+  echo "💡 Please download one via GUI or place at:"
+  echo "   /mnt/pve/<storage>/template/cache/$TEMPLATE_GLOB"
   exit 1
 fi
 
+TEMPLATE_STORAGE=$(echo "$TEMPLATE_FILE" | cut -d'/' -f4)
 TEMPLATE_BASENAME=$(basename "$TEMPLATE_FILE")
-echo "💾 Using template: $TEMPLATE_BASENAME"
-echo "🆔 Using CTID: $CTID"
-echo "📦 Storage type: $STORAGE_TYPE"
 
-# === Create the container (NO --storage used here)
+echo "💾 Found template: $TEMPLATE_BASENAME on storage: $TEMPLATE_STORAGE"
+echo "🆔 Preparing container with CTID: $CTID"
+
+# === Prompt for container rootfs storage
+echo ""
+echo "🔍 Available storage options for container rootfs:"
+pvesm status --enabled 1 | awk '{print "  - " $1 " (" $2 ")"}'
+echo ""
+read -rp "💾 Enter storage to use for the container rootfs (e.g. nas, local-lvm): " ROOTFS_STORAGE
+
+if ! pvesm status | awk '{print $1}' | grep -qx "$ROOTFS_STORAGE"; then
+  echo "❌ Storage '$ROOTFS_STORAGE' not found. Aborting."
+  exit 1
+fi
+
+# === Detect rootfs storage type
+STORAGE_TYPE=$(pvesm status | awk -v s="$ROOTFS_STORAGE" '$1==s {print $2}')
+if [ -z "$STORAGE_TYPE" ]; then
+  echo "❌ Could not detect storage type for '$ROOTFS_STORAGE'"
+  exit 1
+fi
+
+# === Set rootfs argument based on storage type
+if [[ "$STORAGE_TYPE" == "dir" || "$STORAGE_TYPE" == "nfs" || "$STORAGE_TYPE" == "cifs" ]]; then
+  ROOTFS_ARG="--rootfs $ROOTFS_STORAGE"
+else
+  ROOTFS_ARG="--rootfs $ROOTFS_STORAGE:$DISK_SIZE"
+fi
+
+echo "📦 Creating container on storage: $ROOTFS_STORAGE ($STORAGE_TYPE)"
+
+# === Create container
 pct create "$CTID" "$TEMPLATE_FILE" \
   --hostname "$HOSTNAME" \
   --password "$PASSWORD" \
@@ -92,7 +95,7 @@ docker volume create portainer_data
 docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest
 '
 
-# === Get container IP and display
+# === Show access URL
 IP=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
 echo ""
 echo "✅ Portainer is ready!"
