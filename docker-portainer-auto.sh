@@ -1,13 +1,19 @@
 #!/bin/bash
 
-set +e  # graceful fail handling
+set +e  # Allow graceful handling of errors
 
 echo "🚀 Proxmox Docker + Portainer Setup"
 
 # === Constants ===
 TEMPLATE_GLOB="debian-12-standard_*_amd64.tar.zst"
 CTID=$(pvesh get /cluster/nextid)
-HOSTNAME="portainer-deb12"
+
+read -rp "📝 Enter a name for the container (hostname): " HOSTNAME
+if [[ -z "$HOSTNAME" ]]; then
+  echo "❌ Hostname cannot be empty. Aborting."
+  exit 1
+fi
+
 PASSWORD="changeme"
 DISK_SIZE="8G"
 MEMORY=2048
