@@ -22,14 +22,23 @@ VALID_STORES=($(pvesm status --enabled 1 | awk '/vztmpl/ {print $1}'))
 
 if [ ${#VALID_STORES[@]} -eq 0 ]; then
   echo "❌ No storage found with 'vztmpl' content enabled."
-  echo "Use: pvesm set <storage> --content vztmpl"
+  echo "👉 Run this to enable: pvesm set <storage> --content vztmpl,backup,iso"
   exit 1
 fi
 
+# === Ensure all storage is mounted ===
+for store in "${VALID_STORES[@]}"; do
+  MOUNTPOINT="/mnt/pve/${store}"
+  if ! mountpoint -q "$MOUNTPOINT"; then
+    echo "🔄 Mounting $store..."
+    pvesm path "$store" > /dev/null 2>&1 || true
+  fi
+done
+
+# === Try to locate an existing template ===
 TEMPLATE_STORE=""
 TEMPLATE_FILE=""
 
-# === Search for existing Debian 12 template ===
 for store in "${VALID_STORES[@]}"; do
   CACHE_PATH="/mnt/pve/${store}/template/cache"
   FILE=$(find "$CACHE_PATH" -type f -name "$TEMPLATE_GLOB" 2>/dev/null | sort -rV | head -n 1)
@@ -40,7 +49,7 @@ for store in "${VALID_STORES[@]}"; do
   fi
 done
 
-# === Download template if not found ===
+# === Download if not found ===
 if [ -z "$TEMPLATE_FILE" ]; then
   echo "📦 No template found. Downloading into '${VALID_STORES[0]}'..."
   pveam update
@@ -97,7 +106,7 @@ docker volume create portainer_data
 docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest
 '
 
-# === Output Access URL ===
+# === Show result ===
 IP=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
 echo ""
 echo "✅ Portainer is ready!"
