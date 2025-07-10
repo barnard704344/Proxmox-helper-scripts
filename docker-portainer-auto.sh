@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set +e  # allow graceful handling instead of exiting on errors
+set +e  # Allow graceful handling
 
 echo "🚀 Proxmox Docker + Portainer Setup"
 
@@ -40,21 +40,18 @@ while true; do
   echo ""
   read -rp "💾 Enter storage to use for the container rootfs (e.g. nas, local-lvm): " ROOTFS_STORAGE
 
-  # Check if storage exists
   pvesm status | awk '{print $1}' | grep -qx "$ROOTFS_STORAGE"
   if [ $? -ne 0 ]; then
     echo "❌ Storage '$ROOTFS_STORAGE' not found. Try again."
     continue
   fi
 
-  # Detect storage type
   STORAGE_TYPE=$(pvesm status | awk -v s="$ROOTFS_STORAGE" '$1==s {print $2}')
   if [ -z "$STORAGE_TYPE" ]; then
     echo "❌ Could not detect storage type for '$ROOTFS_STORAGE'. Try again."
     continue
   fi
 
-  # Handle LVM without thin pool
   if [[ "$STORAGE_TYPE" == "lvm" ]]; then
     VG_ATTR=$(vgs --noheadings -o attr "$ROOTFS_STORAGE" 2>/dev/null | awk '{print $1}')
     if [[ "$VG_ATTR" != *"t"* ]]; then
@@ -65,15 +62,15 @@ while true; do
     fi
   fi
 
-  # Valid storage selected
   break
 done
 
-# === Set rootfs argument based on storage type
+# === Fix rootfs argument
 if [[ "$STORAGE_TYPE" == "dir" || "$STORAGE_TYPE" == "nfs" || "$STORAGE_TYPE" == "cifs" ]]; then
   ROOTFS_ARG="--rootfs $ROOTFS_STORAGE"
 else
-  ROOTFS_ARG="--rootfs $ROOTFS_STORAGE:$DISK_SIZE"
+  SIZE_NUM="${DISK_SIZE//[!0-9]/}"
+  ROOTFS_ARG="--rootfs $ROOTFS_STORAGE:$SIZE_NUM"
 fi
 
 echo "📦 Creating container on storage: $ROOTFS_STORAGE ($STORAGE_TYPE)"
@@ -89,6 +86,12 @@ pct create "$CTID" "$TEMPLATE_FILE" \
   --cores "$CORES" \
   --memory "$MEMORY" \
   --unprivileged 1 > /dev/null
+
+# === Validate container creation
+if ! pct config "$CTID" &>/dev/null; then
+  echo "❌ Failed to create container $CTID. Aborting."
+  exit 1
+fi
 
 # === Start container
 echo "▶️ Starting container $CTID..."
